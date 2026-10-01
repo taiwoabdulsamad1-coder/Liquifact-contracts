@@ -105,9 +105,12 @@ fn test_muxed_address_compatibility() {
     let amount = 500i128;
     token.stellar.mint(&holder, &amount);
 
-    // Verify that MuxedAddress conversion works correctly
-    let muxed_treasury = MuxedAddress::from(treasury.clone());
-    assert_eq!(muxed_treasury.address(), treasury);
+    // Verify that MuxedAddress conversion works correctly.
+    // `MuxedAddress` is constructed from an `Address` via `From`/`Into`; the
+    // resulting value must round-trip back to the original address so that
+    // callers relying on the compatibility contract observe no change.
+    let muxed_treasury: MuxedAddress = treasury.clone().into();
+    assert_eq!(Address::from(muxed_treasury.clone()), treasury);
 
     // Transfer should work with MuxedAddress internally
     transfer_funding_token_with_balance_checks(&env, &token.id, &holder, &treasury, amount);

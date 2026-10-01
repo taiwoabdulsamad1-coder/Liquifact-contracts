@@ -191,6 +191,67 @@ fn test_partial_settle_no_auth_panics() {
     client.partial_settle(&sme);
 }
 
+// ── accept_admin ───────────────────────────────────────────────────────
+
+/// The missing-proposal validation runs before authorization is required.
+#[test]
+fn test_accept_admin_without_pending_proposal_returns_validation_error() {
+    let env = Env::default();
+    let (client, _admin, _sme, _treasury, _token) = setup_inited(&env);
+    env.mock_auths(&[]);
+
+    assert_contract_error(client.try_accept_admin(), EscrowError::NoPendingAdmin);
+}
+
+/// A pending-admin proposal cannot be accepted by another signer, and the
+/// failed authorization leaves both the active admin and proposal unchanged.
+#[test]
+fn test_accept_admin_wrong_signer_preserves_handover_state() {
+    let env = Env::default();
+    let (client, admin, _sme, _treasury, _token) = setup_inited(&env);
+    let pending_admin = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    client.propose_admin(&pending_admin, &0u32);
+
+    env.mock_auths(&[MockAuth {
+        address: &stranger,
+        invoke: &MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "accept_admin",
+            args: SorobanVec::new(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client.accept_admin()));
+
+    assert!(result.is_err(), "expected pending-admin authorization to be enforced");
+    assert_eq!(client.get_escrow().admin, admin);
+    assert_eq!(client.get_pending_admin(), Some(pending_admin));
+}
+
+/// Only the nominated pending admin can complete the handover.
+#[test]
+fn test_accept_admin_pending_admin_authorization_succeeds() {
+    let env = Env::default();
+    let (client, _admin, _sme, _treasury, _token) = setup_inited(&env);
+    let pending_admin = Address::generate(&env);
+    client.propose_admin(&pending_admin, &0u32);
+
+    env.mock_auths(&[MockAuth {
+        address: &pending_admin,
+        invoke: &MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "accept_admin",
+            args: SorobanVec::new(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let updated = client.accept_admin();
+
+    assert_eq!(updated.admin, pending_admin);
+    assert_eq!(client.get_pending_admin(), None);
+}
+
 // ── settle ──────────────────────────────────────────────────────────────
 
 /// Calling `settle` with no authorization panics at the host-level

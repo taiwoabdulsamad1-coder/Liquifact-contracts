@@ -4,16 +4,26 @@
 // and verify that each documented error branch is reachable. Comprehensive
 // coverage (including DataKey::Version immutability, historical-version sweeps,
 // and auth-first ordering) lives in the anchoring suite in tests/admin.rs.
+//
+// Invariants under test:
+//   - migrate() is auth-gated and only the admin may call it.
+//   - migrate() is idempotent and deterministic for valid, invalid,
+//     duplicate, and boundary inputs.
+//   - Failed migrations must not mutate the stored schema version.
+//   - Errors are typed and diagnosable without leaking sensitive data.
 
 use super::*;
 
 /// Calling migrate(stored_version - 1) with the correct stored version
 /// must raise MigrationVersionMismatch (stored != from_version).
+///
+/// The failed call must leave the stored version unchanged (no partial
+/// state transition).
 #[test]
 fn test_migration_version_mismatch() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = deploy(&env);
+    let (contract_id, client) = deploy_with_id(&env);
     let admin = Address::generate(&env);
     let sme = Address::generate(&env);
 
@@ -22,7 +32,7 @@ fn test_migration_version_mismatch() {
         &soroban_sdk::String::from_str(&env, "MIGSMK1"),
         &sme,
         &1_000i128,
-        &500i64,
+        &p00i64,
         &0u64,
         &Address::generate(&env),
         &None,
@@ -39,20 +49,43 @@ fn test_migration_version_mismatch() {
         &None::<u32>,
     );
 
-    // stored = SCHEMA_VERSION (6), from_version = 5 → mismatch
+    // Pre: stored version is SCHEMA_VERSION.
+    let stored_before = env.as.contract(&contract_id, || {
+        env.storage().instance().get::<DataKey, u32>(&DataKey::Version)
+    });
+    assert_eq(
+        stored_before,
+        Some(SCHEMA_VERSION),
+        "freshly initialized contract must start at the current schema version",
+    );
+
+    // stored = SCHEMA_VERSION, from_version = SCHEMA_VERSION - 1 → mismatch
     assert_contract_error(
         client.try_migrate(&(SCHEMA_VERSION - 1)),
         EscrowError::MigrationVersionMismatch,
+    );
+
+    // Post: failed migration must not mutate the stored version.
+    let stored_after = env.as.contract(&contract_id, || {
+        env.storage().instance().get::<DataKey, u32>(&DataKey::Version)
+    });
+    assert_eq(
+        stored_after,
+        Some(SCHEMA_VERSION),
+        "failed migration must not mutate the stored schema version",
     );
 }
 
 /// Calling migrate(SCHEMA_VERSION) with stored=SCHEMA_VERSION must raise
 /// AlreadyCurrentSchemaVersion (from_version >= SCHEMA_VERSION after mismatch passes).
+///
+/// This is the idempotent duplicate-call case: repeated migration to the
+/// current version must be rejected and must not alter state.
 #[test]
 fn test_already_current_schema_version() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = deploy(&env);
+    let (contract_id, client) = deploy_with_id(&env);
     let admin = Address::generate(&env);
     let sme = Address::generate(&env);
 
@@ -82,6 +115,21 @@ fn test_already_current_schema_version() {
         client.try_migrate(&SCHEMA_VERSION),
         EscrowError::AlreadyCurrentSchemaVersion,
     );
+
+    // Repeated duplicate call must be deterministic and not mutate state.
+    assert_contract_error(
+        client.try_migrate(&SCHEMA_VERSION),
+        EscrowError::AlreadyCurrentSchemaVersion,
+    );
+
+    let stored_after = env.as_contract(&contract_id, || {
+        env.storage().instance().get::<DataKey, u32>(&DataKey::Version)
+    });
+    assert_eq(
+        stored_after,
+        Some(SCHEMA_VERSION),
+        "duplicate migration must not mutate the stored schema version",
+    );
 }
 
 /// Calling migrate(1) when stored version is manually set to 1 must raise
@@ -99,7 +147,7 @@ fn test_no_migration_path() {
         &soroban_sdk::String::from_str(&env, "MIGSMK3"),
         &sme,
         &1_000i128,
-        &500i64,
+        &p00i64,
         &0u64,
         &Address::generate(&env),
         &None,
@@ -122,4 +170,14 @@ fn test_no_migration_path() {
     });
 
     assert_contract_error(client.try_migrate(&1u32), EscrowError::NoMigrationPath);
+
+    // Failed migration must not mutate the stored version.
+    let stored_after = env.as_contract(&contract_id, || {
+        env.storage().instance().get::<DataKey, u32>(&DataKey::Version)
+    });
+    assert_eq(
+        stored_after,
+        Some(1u32),
+        "failed migration must not mutate the stored schema version",
+    );
 }

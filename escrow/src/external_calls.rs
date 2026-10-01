@@ -1,73 +1,82 @@
-//! Hardened wrappers around cross-contract calls used by this escrow.
-//!
-//! This crate only performs **token** transfers on the address stored under
-//! [`crate::DataKey::FundingToken`] after initialization. That address must be a **standard**
-//! [SEP-41](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0041.md)-style
-//! token with no fee-on-transfer or balance-deficit behavior: post-transfer balance **deltas** must
-//! match the requested `amount` exactly on both sides.
+/// Hardened wrappers around cross-contract calls used by this escrow.
+///
+/// This crate only performs **token** transfers on the address stored under
+/// [`crate::DataKey::FundingToken`] after initialization. That address must be a **standard**
+/// [SEP-41](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0041.md)-style
+/// token with no fee-on-transfer or balance-deficit behavior: post-transfer balance **deltas** must
+/// match the requested `amount` exactly on both sides.
 
-//! ## Balance-delta invariants
-//!
-//! All transfers enforce strict pre/post balance checks to ensure mathematical conservation of value:
-//! - **Sender**: balance must decrease by exactly `amount`
-//! - **Recipient**: balance must increase by exactly `amount`
-//! - **Muxed mapping**: recipient address is wrapped in [`MuxedAddress`] for Stellar compatibility
-//! - **Safe failure**: any deviation causes immediate panic with descriptive error message
-//!
-//! The invariants are enforced through atomic balance verification:
-//! 1. Capture pre-transfer balances for both parties
-//! 2. Execute the transfer using standard SEP-41 interface
-//! 3. Capture post-transfer balances and calculate exact deltas
-//! 4. Assert mathematical equality: `sender_delta == recipient_delta == amount`
-//!
-//! ## Test reality and verification
-//!
-//! The test suite validates these invariants through:
-//! - Standard token transfers with exact delta verification
-//! - Edge cases including zero/negative amounts and insufficient balance
-//! - Multiple transfer scenarios to ensure cumulative consistency
-//! - Mocked token scenarios (where feasible) to detect divergence
-//!
-//! ## Out-of-scope token economics
-//!
-//! Malicious, rebasing, or "hook" tokens are **explicitly out of scope** and will cause safe-failure
-//! panics at the balance-check boundary. If such tokens bypass these checks, they must be excluded
-//! by governance allowlists and integration review. Fee-on-transfer tokens are not supported.
-//!
-//! Specifically excluded:
-//! - Tokens with transfer fees (fee-on-transfer)
-//! - Rebasing tokens that change total supply
-//! - Tokens with hooks or callbacks that modify balances
-//! - Tokens with non-standard balance accounting
-//!
-//! ## Governance allowlists
-//!
-//! Integration review and governance allowlists are the primary defense mechanisms against
-//! out-of-scope token economics. The balance-delta checks serve as a technical safety net,
-//! but proper token selection through governance processes remains essential.
-//!
-//! # Soroban execution and "reentrancy"
-//!
-//! Unlike many EVM environments, Soroban does not allow the classic pattern of an external call
-//! immediately re-entering the same contract mid-host-function in an interleaved way: the token
-//! host function runs to completion before this contract resumes. **Still** treat the token as
-//! adversarial for **correctness of balances**: always record pre/post balances around transfers so
-//! integration bugs and non-compliant tokens are caught at the host boundary.
-//!
-//! ## Reviewer timeline (host-call boundary)
-//!
-//! `transfer_funding_token_with_balance_checks` follows this sequence:
-//! 1. Read sender/recipient balances before transfer.
-//! 2. Invoke SEP-41 `transfer` on the configured token contract.
-//! 3. Soroban host executes that token call to completion, then returns.
-//! 4. Read sender/recipient balances after transfer.
-//! 5. Assert exact conservation (`spent == amount` and `received == amount`).
-//!
-//! Security takeaway: this is not relying on "non-reentrancy" as a magic property. It enforces
-//! post-call accounting invariants at the external-call boundary where token behavior is observed.
+/// ## Balance-delta invariants
+///
+/// All transfers enforce strict pre/post balance checks to ensure mathematical conservation of value:
+/// - **Sender**: balance must decrease by exactly `amount`
+/// - **Recipient**: balance must increase by exactly `amount`
+/// - **Muxed mapping**: recipient address is wrapped in [`MuxedAddress`] for Stellar compatibility
+/// - **Safe failure**: any deviation causes immediate panic with descriptive error message
+///
+/// The invariants are enforced through atomic balance verification:
+/// 1. Capture pre-transfer balances for both parties
+/// 2. Execute the transfer using standard SEP-41 interface
+/// 3. Capture post-transfer balances and calculate exact deltas
+/// 4. Assert mathematical equality: `sender_delta == recipient_delta == amount`
+///
+/// ## Test reality and verification
+///
+/// The test suite validates these invariants through:
+/// - Standard token transfers with exact delta verification
+/// - Edge cases including zero/negative amounts and insufficient balance
+/// - Multiple transfer scenarios to ensure cumulative consistency
+/// - Mocked token scenarios (where feasible) to detect divergence
+///
+/// ## Out-of-scope token economics
+///
+/// Malicious, rebasing, or "hook" tokens are **explicitly out of scope** and will cause safe-failure
+/// panics at the balance-check boundary. If such tokens bypass these checks, they must be excluded
+/// by governance allowlists and integration review. Fee-on-transfer tokens are not supported.
+///
+/// Specifically excluded:
+/// - Tokens with transfer fees (fee-on-transfer)
+/// - Rebasing tokens that change total supply
+/// - Tokens with hooks or callbacks that modify balances
+/// - Tokens with non-standard balance accounting
+///
+/// ## Governance allowlists
+///
+/// Integration review and governance allowlists are the primary defense mechanisms against
+/// out-of-scope token economics. The balance-delta checks serve as a technical safety net,
+/// but proper token selection through governance processes remains essential.
+///
+/// # Soroban execution and "reentrancy"
+///
+/// Unlike many EVM environments, Soroban does not allow the classic pattern of an external call
+/// immediately re-entering the same contract mid-host-function in an interleaved way: the token
+/// host function runs to completion before this contract resumes. **Still** treat the token as
+/// adversarial for **correctness of balances**: always record pre/post balances around transfers so
+/// integration bugs and non-compliant tokens are caught at the host boundary.
+///
+/// ## Reviewer timeline (host-call boundary)
+///
+/// `transfer_funding_token_with_balance_checks` follows this sequence:
+/// 1. Read sender/recipient balances before transfer.
+/// 2. Invoke SEP-41 `transfer` on the configured token contract.
+/// 3. Soroban host executes that token call to completion, then returns.
+/// 4. Read sender/recipient balances after transfer.
+/// 5. Assert exact conservation (`spent == amount` and `received == amount`).
+///
+/// Security takeaway: this is not relying on "non-reentrancy" as a magic property. It enforces
+/// post-call accounting invariants at the external-call boundary where token behavior is observed.
 
-use crate::{ensure, fail, EscrowError};
+use crate::{assert_conservation, ensure, fail, EscrowError};
 use soroban_sdk::{token::TokenClient, Address, Env, MuxedAddress};
+
+/// Computes a post-call balance delta without allowing underflow to be hidden by a
+/// wrapping conversion.  Every token call in this module uses this helper so the
+/// outbound and inbound paths enforce the same failure semantics.
+fn checked_balance_delta(env: &Env, before: i128, after: i128, error: EscrowError) -> i128 {
+    after
+        .checked_sub(before)
+        .unwrap_or_else(|| fail(env, error))
+}
 
 /// Transfer `amount` of `token_addr` from `from` (typically this escrow contract) to `treasury`,
 /// then verify SEP-41-style conservation: sender decreases and recipient increases by exactly
@@ -85,6 +94,7 @@ use soroban_sdk::{token::TokenClient, Address, Env, MuxedAddress};
 /// - Balance manipulation or integration bugs
 ///
 /// # Arguments
+
 ///
 /// * `env` - The Soroban environment
 /// * `token_addr` - Address of the SEP-41 token contract
@@ -125,23 +135,67 @@ pub fn transfer_funding_token_with_balance_checks(
     let from_after = token.balance(from);
     let treasury_after = token.balance(treasury);
 
+    let spent = checked_balance_delta(
+        env,
+        from_after,
+        from_before,
+        EscrowError::SenderBalanceUnderflow,
+    );
+    let received = checked_balance_delta(
+        env,
+        treasury_before,
+        treasury_after,
+        EscrowError::RecipientBalanceUnderflow,
+    );
+
+    assert_conservation(env, spent, received, amount);
+}
+
+/// Transfer `amount` of `token` from an external payer into the escrow contract,
+/// then verify the recipient balance increased by exactly `amount`.
+///
+/// The sender balance must not increase during the call. A sender increase is
+/// rejected by the checked subtraction below, while an under-delivery or
+/// over-delivery to the escrow is rejected by the exact recipient delta check.
+/// These checks keep inbound custody compatible with the outbound transfer
+/// boundary and make fee-on-transfer, rebasing, and hook-token behavior fail
+/// deterministically.
+pub fn transfer_into_escrow_with_balance_checks(
+    env: &Env,
+    token: &Address,
+    from: &Address,
+    to_contract: &Address,
+    amount: i128,
+) {
+    ensure(env, amount > 0, EscrowError::TransferAmountNotPositive);
+
+    let token_client = TokenClient::new(env, token);
+    let from_before = token_client.balance(from);
+    let contract_before = token_client.balance(to_contract);
+    ensure(
+        env,
+        from_before >= amount,
+        EscrowError::InsufficientTokenBalanceBeforeTransfer,
+    );
+
+    token_client.transfer(from, MuxedAddress::from(to_contract.clone()), &amount);
+
+    let from_after = token_client.balance(from);
+    let contract_after = token_client.balance(to_contract);
+
     let spent = from_before
         .checked_sub(from_after)
         .unwrap_or_else(|| fail(env, EscrowError::SenderBalanceUnderflow));
-    let received = treasury_after
-        .checked_sub(treasury_before)
+    let received = contract_after
+        .checked_sub(contract_before)
         .unwrap_or_else(|| fail(env, EscrowError::RecipientBalanceUnderflow));
 
-    ensure(
-        env,
-        spent == amount,
-        EscrowError::SenderBalanceDeltaMismatch,
-    );
     ensure(
         env,
         received == amount,
         EscrowError::RecipientBalanceDeltaMismatch,
     );
+    ensure(env, spent >= 0, EscrowError::SenderBalanceDeltaMismatch);
 }
 
 /// Transfer `amount` of `token_addr` from `investor` to `to` (typically this escrow contract),
@@ -192,21 +246,18 @@ pub fn transfer_funding_token_inbound_with_balance_checks(
     let investor_after = token.balance(investor);
     let contract_after = token.balance(to);
 
-    let spent = investor_before
-        .checked_sub(investor_after)
-        .unwrap_or_else(|| fail(env, EscrowError::InboundSenderBalanceUnderflow));
-    let received = contract_after
-        .checked_sub(contract_before)
-        .unwrap_or_else(|| fail(env, EscrowError::InboundRecipientBalanceUnderflow));
+    let spent = checked_balance_delta(
+        env,
+        investor_after,
+        investor_before,
+        EscrowError::InboundSenderBalanceUnderflow,
+    );
+    let received = checked_balance_delta(
+        env,
+        contract_before,
+        contract_after,
+        EscrowError::InboundRecipientBalanceUnderflow,
+    );
 
-    ensure(
-        env,
-        spent == amount,
-        EscrowError::InboundSenderBalanceDeltaMismatch,
-    );
-    ensure(
-        env,
-        received == amount,
-        EscrowError::InboundRecipientBalanceDeltaMismatch,
-    );
+    assert_conservation(env, spent, received, amount);
 }

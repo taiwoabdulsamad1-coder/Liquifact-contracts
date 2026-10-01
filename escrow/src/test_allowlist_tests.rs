@@ -1,3 +1,4 @@
+//! Issue #1280: Preserves compatible contracts - allowlist OFF by default, fund() compatible, Error 104 when ON+blocked 
 use super::{
     AllowlistEnabledChanged, DataKey, EscrowError, InvestorAllowlistChanged, LiquifactEscrow,
     LiquifactEscrowClient,

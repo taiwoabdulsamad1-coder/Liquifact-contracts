@@ -10,6 +10,7 @@ use crate::{
     DEFAULT_MATURITY_MAX_HORIZON_SECS, MAX_ATTESTATION_APPEND_ENTRIES, SCHEMA_VERSION,
 };
 use soroban_sdk::{
+    contracterror,
     symbol_short,
     testutils::{Address as _, Events as _, Ledger},
     Address, BytesN, Env, Error, InvokeError, Vec as SorobanVec,
@@ -18,6 +19,7 @@ use soroban_sdk::{
 const AMOUNT: i128 = 100_000_000_000;
 const PLEDGE: i128 = 50_000_000_000;
 
+/// Invariant: typed error codes must remain stable and unique across the escrow contract.
 #[test]
 fn typed_error_codes_cover_init_and_state_guards() {
     let env = Env::default();

@@ -203,3 +203,4 @@ pub enum EscrowError {
     /// be retried deterministically.
     RecoveryCompensationFailed = 407,
 }
+impl EscrowError {}

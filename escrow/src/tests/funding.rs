@@ -119,8 +119,59 @@ fn test_fund_partial_then_full() {
 }
 
 #[test]
-#[should_panic]
+fn competing_funding_at_target_commits_once_and_rejects_late_request() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor_a = Address::generate(&env);
+    let investor_b = Address::generate(&env);
+    let late_investor = Address::generate(&env);
+    let (token, treasury) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "FUND_RACE"),
+        &sme,
+        &100i128,
+        &800i64,
+        &0u64,
+        &token,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
 
+    client.fund(&investor_a, &60i128);
+    assert_eq!(client.get_funding_close_snapshot(), None);
+
+    let closed = client.fund(&investor_b, &40i128);
+    let snapshot = client
+        .get_funding_close_snapshot()
+        .expect("funding close must be captured on the threshold-crossing call");
+    assert_eq!(closed.status, 1);
+    assert_eq!(closed.funded_amount, 100);
+    assert_eq!(snapshot.total_principal, 100);
+    assert_eq!(client.get_unique_funder_count(), 2);
+
+    assert_contract_error(
+        client.try_fund(&late_investor, &1i128),
+        EscrowError::EscrowNotOpenForFunding,
+    );
+    assert_eq!(client.get_escrow().funded_amount, 100);
+    assert_eq!(client.get_funding_close_snapshot(), Some(snapshot));
+    assert_eq!(client.get_contribution(&late_investor), 0);
+    assert_eq!(client.get_unique_funder_count(), 2);
+}
+
+#[test]
+#[should_panic]
 fn test_fund_zero_amount_panics() {
     let env = Env::default();
 
@@ -7209,6 +7260,52 @@ fn test_unfund_full() {
     assert_eq!(result.funded_amount, 0);
     assert_eq!(client.get_unique_funder_count(), 0);
     assert_eq!(result.status, 0);
+}
+
+#[test]
+fn test_full_unfund_then_fund_keeps_one_historical_index_entry() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    let (tok, tre) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "UF_REJOIN"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    client.fund(&investor, &20_000i128);
+    client.unfund(&investor, &20_000i128);
+    assert_eq!(client.get_unique_funder_count(), 0);
+
+    let funded = client.fund(&investor, &5_000i128);
+    assert_eq!(funded.funded_amount, 5_000i128);
+    assert_eq!(client.get_contribution(&investor), 5_000i128);
+    assert_eq!(client.get_unique_funder_count(), 1);
+
+    let investors = client.get_investors(&0, &10);
+    assert_eq!(investors.len(), 1, "re-entry must not duplicate the index");
+    assert_eq!(investors.get(0).unwrap(), investor);
+
+    let records = client.get_funding_records(&0, &10);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records.get(0).unwrap(), (investor, 5_000i128));
 }
 
 #[test]

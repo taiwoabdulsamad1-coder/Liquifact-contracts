@@ -23,7 +23,7 @@
 // Bring in the shared test helpers (setup, free_addresses, install_stellar_asset_token,
 // assert_contract_error, StellarTestToken, deploy, etc.) plus all re-exported types.
 use super::*;
-use crate::{LiquifactEscrow, MAX_INVOICE_AMOUNT, MIN_PAUSE_MAX_DURATION_SECS};
+use crate::{LiquifactEscrow, MAX_INVOICE_AMOUNT, MIN_PAUSE_MAX_DURATION_SECS, PauseReason, PauseScope};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     Address, Env, InvokeError, String,
@@ -67,6 +67,7 @@ fn setup_with_token(
         &None,
         &None,
         &protocol_fee_bps,
+        &None::<u32>, // token_decimals
     );
     (client, id, sme, sac)
 }
@@ -108,6 +109,7 @@ fn setup_no_token(
         &None,
         &None,
         &protocol_fee_bps,
+        &None::<u32>, // token_decimals
     );
     (client, id, sme)
 }
